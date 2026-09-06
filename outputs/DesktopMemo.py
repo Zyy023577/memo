@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tkinter as tk
@@ -9,12 +10,14 @@ from tkinter import messagebox, ttk
 
 
 APP_NAME = "桌面备忘录"
+APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 DATA_FILE = Path(os.environ.get("APPDATA", Path.home())) / "DesktopMemo" / "notes.json"
-LOCAL_DATA_FILE = Path(__file__).with_name("notes.json")
+LOCAL_DATA_FILE = APP_DIR / "notes.json"
 SETTINGS_FILE = DATA_FILE.parent / "settings.json"
-LOCAL_SETTINGS_FILE = Path(__file__).with_name("settings.json")
-ICON_PNG = Path(__file__).with_name("desktop-memo-icon.png")
-ICON_ICO = Path(__file__).with_name("desktop-memo-icon.ico")
+LOCAL_SETTINGS_FILE = APP_DIR / "settings.json"
+ICON_PNG = RESOURCE_DIR / "desktop-memo-icon.png"
+ICON_ICO = RESOURCE_DIR / "desktop-memo-icon.ico"
 
 BG = "#E6E1DB"
 SURFACE = "#F1EEE9"
@@ -93,6 +96,62 @@ class DesktopMemo(tk.Tk):
         except tk.TclError:
             pass
 
+    def _setup_preview_tags(self):
+        self.preview_text.tag_configure("h1", font=("Microsoft YaHei UI", 16, "bold"), foreground=SAGE_DARK, spacing1=8, spacing3=5)
+        self.preview_text.tag_configure("h2", font=("Microsoft YaHei UI", 13, "bold"), foreground=SLATE, spacing1=6, spacing3=4)
+        self.preview_text.tag_configure("h3", font=("Microsoft YaHei UI", 11, "bold"), foreground=TERRACOTTA, spacing1=5, spacing3=3)
+        self.preview_text.tag_configure("bold", font=("Microsoft YaHei UI", 11, "bold"))
+        self.preview_text.tag_configure("italic", font=("Microsoft YaHei UI", 11, "italic"), foreground=MUTED)
+        self.preview_text.tag_configure("code", font=("Consolas", 10), foreground=SAGE_DARK, background="#E4E0D8")
+        self.preview_text.tag_configure("codeblock", font=("Consolas", 10), foreground=TEXT, background="#E4E0D8", lmargin1=10, lmargin2=10)
+
+    def _insert_inline_markdown(self, text):
+        pattern = r"(\*\*.*?\*\*|`.*?`|\*.*?\*)"
+        for part in re.split(pattern, text):
+            if not part:
+                continue
+            if part.startswith("**") and part.endswith("**"):
+                self.preview_text.insert("end", part[2:-2], "bold")
+            elif part.startswith("`") and part.endswith("`"):
+                self.preview_text.insert("end", part[1:-1], "code")
+            elif part.startswith("*") and part.endswith("*"):
+                self.preview_text.insert("end", part[1:-1], "italic")
+            else:
+                self.preview_text.insert("end", part)
+
+    def _render_preview(self):
+        if not hasattr(self, "preview_text"):
+            return
+        markdown = self.body_text.get("1.0", "end-1c")
+        self.preview_text.configure(state="normal")
+        self.preview_text.delete("1.0", tk.END)
+        in_code_block = False
+        for raw_line in markdown.splitlines():
+            line = raw_line.rstrip()
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                if not in_code_block:
+                    self.preview_text.insert("end", "\n")
+                continue
+            if in_code_block:
+                self.preview_text.insert("end", line + "\n", "codeblock")
+                continue
+            heading = re.match(r"^(#{1,3})\s+(.+)$", line)
+            if heading:
+                self.preview_text.insert("end", heading.group(2) + "\n", f"h{len(heading.group(1))}")
+            elif re.match(r"^\s*[-*]\s+", line):
+                self.preview_text.insert("end", "• ")
+                self._insert_inline_markdown(re.sub(r"^\s*[-*]\s+", "", line))
+                self.preview_text.insert("end", "\n")
+            else:
+                self._insert_inline_markdown(line)
+                self.preview_text.insert("end", "\n")
+        self.preview_text.configure(state="disabled")
+
+    def _on_body_changed(self):
+        self._render_preview()
+        self._schedule_autosave()
+
     def _build_ui(self):
         outer = ttk.Frame(self, style="App.TFrame", padding=14)
         outer.pack(fill="both", expand=True)
@@ -108,6 +167,8 @@ class DesktopMemo(tk.Tk):
         ttk.Button(toolbar, text="＋ 新建", style="Accent.TButton", command=self.new_note).pack(side="left")
         ttk.Button(toolbar, text="保存", style="Toolbar.TButton", command=self.save_current).pack(side="left", padx=(8, 0))
         ttk.Button(toolbar, text="删除", style="Toolbar.TButton", command=self.delete_current).pack(side="left", padx=(8, 0))
+        self.pin_button = ttk.Button(toolbar, text="置顶", style="Toolbar.TButton", command=self.toggle_pin)
+        self.pin_button.pack(side="left", padx=(8, 0))
         ttk.Button(toolbar, text="桌面小组件", style="Toolbar.TButton", command=self.toggle_widget).pack(side="left", padx=(8, 0))
         ttk.Label(toolbar, text="搜索：", style="Muted.TLabel").pack(side="left", padx=(24, 0))
         search = ttk.Entry(toolbar, textvariable=self.search_var, width=26)
@@ -146,18 +207,29 @@ class DesktopMemo(tk.Tk):
         self.note_list.configure(yscrollcommand=list_scroll.set)
 
         editor_card = ttk.Frame(content, style="Card.TFrame", padding=14)
-        editor_card.rowconfigure(2, weight=1)
+        editor_card.rowconfigure(3, weight=1)
         editor_card.columnconfigure(0, weight=1)
         ttk.Label(editor_card, text="编辑内容", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         self.title_entry = ttk.Entry(editor_card, font=("Microsoft YaHei UI", 12, "bold"))
         self.title_entry.grid(row=1, column=0, sticky="ew", pady=(8, 8))
         self.title_entry.insert(0, "新便签")
+        ttk.Label(editor_card, text="支持 Markdown：# 标题   - 列表   **加粗**   `代码`   ```代码块```", style="Muted.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 6))
         text_frame = ttk.Frame(editor_card, style="Card.TFrame")
-        text_frame.grid(row=2, column=0, sticky="nsew")
+        text_frame.grid(row=3, column=0, sticky="nsew")
         text_frame.rowconfigure(0, weight=1)
         text_frame.columnconfigure(0, weight=1)
+        self.editor_tabs = ttk.Notebook(text_frame)
+        self.editor_tabs.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        edit_tab = ttk.Frame(self.editor_tabs, style="Card.TFrame", padding=2)
+        preview_tab = ttk.Frame(self.editor_tabs, style="Card.TFrame", padding=2)
+        edit_tab.rowconfigure(0, weight=1)
+        edit_tab.columnconfigure(0, weight=1)
+        preview_tab.rowconfigure(0, weight=1)
+        preview_tab.columnconfigure(0, weight=1)
+        self.editor_tabs.add(edit_tab, text="编辑 Markdown")
+        self.editor_tabs.add(preview_tab, text="预览")
         self.body_text = tk.Text(
-            text_frame,
+            edit_tab,
             wrap="word",
             undo=True,
             relief="flat",
@@ -173,9 +245,27 @@ class DesktopMemo(tk.Tk):
             highlightcolor=SLATE,
         )
         self.body_text.grid(row=0, column=0, sticky="nsew")
-        text_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.body_text.yview)
+        text_scroll = ttk.Scrollbar(edit_tab, orient="vertical", command=self.body_text.yview)
         text_scroll.grid(row=0, column=1, sticky="ns")
         self.body_text.configure(yscrollcommand=text_scroll.set)
+        self.preview_text = tk.Text(
+            preview_tab,
+            wrap="word",
+            relief="flat",
+            borderwidth=0,
+            bg=CREAM,
+            fg=TEXT,
+            padx=14,
+            pady=14,
+            font=("Microsoft YaHei UI", 11),
+            state="disabled",
+            cursor="arrow",
+        )
+        self.preview_text.grid(row=0, column=0, sticky="nsew")
+        preview_scroll = ttk.Scrollbar(preview_tab, orient="vertical", command=self.preview_text.yview)
+        preview_scroll.grid(row=0, column=1, sticky="ns")
+        self.preview_text.configure(yscrollcommand=preview_scroll.set)
+        self._setup_preview_tags()
 
         self.splitter = ttk.Panedwindow(content, orient="horizontal")
         self.splitter.grid(row=0, column=0, sticky="nsew")
@@ -201,7 +291,8 @@ class DesktopMemo(tk.Tk):
         self.note_list.bind("<<ListboxSelect>>", self._on_note_selected)
         self.search_var.trace_add("write", lambda *_: self._refresh_list())
         self.title_entry.bind("<KeyRelease>", lambda event: self._schedule_autosave())
-        self.body_text.bind("<KeyRelease>", lambda event: self._schedule_autosave())
+        self.body_text.bind("<KeyRelease>", lambda event: self._on_body_changed())
+        self.editor_tabs.bind("<<NotebookTabChanged>>", lambda _event: self._render_preview())
         self.bind("<Control-n>", lambda event: self.new_note())
         self.bind("<Control-s>", lambda event: self.save_current())
         self.bind("<Delete>", lambda event: self.delete_current())
@@ -214,10 +305,13 @@ class DesktopMemo(tk.Tk):
                 self.notes = json.loads(data_file.read_text(encoding="utf-8"))
                 if not isinstance(self.notes, list):
                     self.notes = []
+                self.notes = [note for note in self.notes if isinstance(note, dict)]
+                for note in self.notes:
+                    note["pinned"] = bool(note.get("pinned", False))
         except (OSError, json.JSONDecodeError):
             self.notes = []
         if self.notes:
-            self.current_index = 0
+            self.current_index = self._ordered_indices()[0]
             if not self.widget_only:
                 self._refresh_list()
                 self._select_visible_index(0)
@@ -236,7 +330,11 @@ class DesktopMemo(tk.Tk):
                     loaded = json.loads(data_file.read_text(encoding="utf-8"))
                     if isinstance(loaded, list):
                         self.notes = loaded
-                        self.current_index = 0 if self.notes else None
+                        self.notes = [note for note in self.notes if isinstance(note, dict)]
+                        for note in self.notes:
+                            note["pinned"] = bool(note.get("pinned", False))
+                        ordered = self._ordered_indices()
+                        self.current_index = ordered[0] if ordered else None
                         self._update_widget()
         except (OSError, json.JSONDecodeError):
             pass
@@ -379,8 +477,11 @@ class DesktopMemo(tk.Tk):
 
     def _show_main_window(self):
         if self.widget_only:
-            script_path = Path(__file__).with_name("DesktopMemo.py")
-            subprocess.Popen([sys.executable, str(script_path)], cwd=str(script_path.parent))
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable], cwd=str(APP_DIR))
+            else:
+                script_path = Path(__file__).with_name("DesktopMemo.py")
+                subprocess.Popen([sys.executable, str(script_path)], cwd=str(script_path.parent))
             return
         self.deiconify()
         self.lift()
@@ -390,6 +491,7 @@ class DesktopMemo(tk.Tk):
         if self.widget_window is None:
             return
         if self.current_index is None or self.current_index >= len(self.notes):
+            self.widget_header.configure(text="桌面便签")
             self.widget_title.configure(text="暂无便签")
             self.widget_body.configure(text="点击“＋ 新建”开始记录")
             self.widget_footer.configure(text="")
@@ -402,24 +504,53 @@ class DesktopMemo(tk.Tk):
         self.widget_title.configure(text=title)
         self.widget_body.configure(text=body)
         self.widget_footer.configure(text=f"更新于 {note.get('updated_at', '')}")
+        self.widget_header.configure(text="📌 桌面便签" if note.get("pinned", False) else "桌面便签")
+
+    def _update_pin_button(self):
+        if not hasattr(self, "pin_button"):
+            return
+        is_pinned = self.current_index is not None and self.current_index < len(self.notes) and self.notes[self.current_index].get("pinned", False)
+        self.pin_button.configure(text="取消置顶" if is_pinned else "置顶")
+
+    def toggle_pin(self):
+        if self.current_index is None or self.current_index >= len(self.notes):
+            return
+        note = self.notes[self.current_index]
+        note["pinned"] = not note.get("pinned", False)
+        self._write_notes()
+        self._refresh_list()
+        visible = self._visible_indices()
+        if self.current_index in visible:
+            selected = visible.index(self.current_index)
+            self.note_list.selection_set(selected)
+            self.note_list.see(selected)
+        self._update_pin_button()
+        self._update_widget()
 
     def _refresh_list(self):
         keyword = self.search_var.get().strip().lower()
         self.note_list.delete(0, tk.END)
-        for note in self.notes:
+        for index in self._visible_indices():
+            note = self.notes[index]
             title = note.get("title", "未命名便签") or "未命名便签"
             body = note.get("body", "").replace("\n", " ").strip()
-            if keyword and keyword not in f"{title} {body}".lower():
-                continue
-            preview = f"{title}  ·  {body[:18]}" if body else title
+            pin_mark = "📌 " if note.get("pinned", False) else ""
+            preview = f"{pin_mark}{title}  ·  {body[:18]}" if body else f"{pin_mark}{title}"
             self.note_list.insert(tk.END, preview)
 
     def _visible_indices(self):
         keyword = self.search_var.get().strip().lower()
         return [
-            index for index, note in enumerate(self.notes)
+            index for index in self._ordered_indices()
+            for note in [self.notes[index]]
             if not keyword or keyword in f"{note.get('title', '')} {note.get('body', '')}".lower()
         ]
+
+    def _ordered_indices(self):
+        return sorted(
+            range(len(self.notes)),
+            key=lambda index: not bool(self.notes[index].get("pinned", False)),
+        )
 
     def _select_visible_index(self, visible_index):
         visible = self._visible_indices()
@@ -452,12 +583,16 @@ class DesktopMemo(tk.Tk):
         self.body_text.delete("1.0", tk.END)
         self.body_text.insert("1.0", note.get("body", ""))
         self.status_var.set(f"上次保存：{note.get('updated_at', '刚刚')}")
+        self._render_preview()
+        self._update_pin_button()
         self._update_widget()
 
     def _clear_editor(self):
         self.title_entry.delete(0, tk.END)
         self.body_text.delete("1.0", tk.END)
         self.status_var.set("没有匹配的便签")
+        self._render_preview()
+        self._update_pin_button()
         self._update_widget()
 
     def _schedule_autosave(self):
@@ -470,7 +605,7 @@ class DesktopMemo(tk.Tk):
 
     def new_note(self):
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        self.notes.insert(0, {"title": "新便签", "body": "", "updated_at": now})
+        self.notes.insert(0, {"title": "新便签", "body": "", "updated_at": now, "pinned": False})
         self.search_var.set("")
         self._write_notes()
         self._refresh_list()
@@ -488,6 +623,7 @@ class DesktopMemo(tk.Tk):
             "title": title,
             "body": body,
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "pinned": self.notes[self.current_index].get("pinned", False),
         }
         self._write_notes()
         self._refresh_list()
@@ -497,6 +633,7 @@ class DesktopMemo(tk.Tk):
             self.note_list.selection_set(selected)
             self.note_list.see(selected)
         self.status_var.set("已自动保存 · " + datetime.now().strftime("%H:%M:%S"))
+        self._update_pin_button()
         self._update_widget()
         self._autosave_job = None
 
