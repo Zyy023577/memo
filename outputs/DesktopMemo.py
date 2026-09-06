@@ -179,8 +179,10 @@ class DesktopMemo(tk.Tk):
         content.pack(fill="both", expand=True)
         content.columnconfigure(0, weight=1)
         content.rowconfigure(0, weight=1)
+        self.splitter = ttk.Panedwindow(content, orient="horizontal")
+        self.splitter.grid(row=0, column=0, sticky="nsew")
 
-        list_card = ttk.Frame(content, style="Card.TFrame", padding=10)
+        list_card = ttk.Frame(self.splitter, style="Card.TFrame", padding=10)
         list_card.rowconfigure(1, weight=1)
         list_card.columnconfigure(0, weight=1)
         ttk.Label(list_card, text="便签列表", style="Muted.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 7))
@@ -207,7 +209,7 @@ class DesktopMemo(tk.Tk):
         list_scroll.grid(row=0, column=1, sticky="ns")
         self.note_list.configure(yscrollcommand=list_scroll.set)
 
-        editor_card = ttk.Frame(content, style="Card.TFrame", padding=14)
+        editor_card = ttk.Frame(self.splitter, style="Card.TFrame", padding=14)
         editor_card.rowconfigure(3, weight=1)
         editor_card.columnconfigure(0, weight=1)
         ttk.Label(editor_card, text="编辑内容", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
@@ -268,8 +270,6 @@ class DesktopMemo(tk.Tk):
         self.preview_text.configure(yscrollcommand=preview_scroll.set)
         self._setup_preview_tags()
 
-        self.splitter = ttk.Panedwindow(content, orient="horizontal")
-        self.splitter.grid(row=0, column=0, sticky="nsew")
         self.splitter.add(list_card, weight=1)
         self.splitter.add(editor_card, weight=3)
         if self.saved_splitter_pos:
