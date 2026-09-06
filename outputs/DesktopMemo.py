@@ -400,7 +400,9 @@ class DesktopMemo(tk.Tk):
         self.widget_window.geometry(self.saved_widget_geometry or "300x280")
         self.widget_window.resizable(False, False)
         self.widget_window.overrideredirect(True)
-        self.widget_window.attributes("-topmost", True)
+        # The widget belongs to the desktop layer: it should be covered by
+        # normal application windows instead of staying above everything.
+        self.widget_window.attributes("-topmost", False)
         self.widget_window.configure(bg=BORDER)
 
         shell = tk.Frame(self.widget_window, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
@@ -472,7 +474,7 @@ class DesktopMemo(tk.Tk):
         elif self.widget_window.state() == "withdrawn":
             self._place_widget()
             self.widget_window.deiconify()
-            self.widget_window.lift()
+            self.widget_window.lower()
         else:
             self._hide_widget()
 
