@@ -177,6 +177,7 @@ class DesktopMemo(tk.Tk):
 
         content = ttk.Frame(outer, style="App.TFrame")
         content.pack(fill="both", expand=True)
+        content.columnconfigure(0, weight=1)
         content.rowconfigure(0, weight=1)
 
         list_card = ttk.Frame(content, style="Card.TFrame", padding=10)
